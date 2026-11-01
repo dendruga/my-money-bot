@@ -1,11 +1,12 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List
+import sqlite3
 from datetime import datetime
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import os
 from pymongo import MongoClient
+from bson import ObjectId
 
 app = FastAPI()
 
@@ -16,9 +17,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Получаем ссылку на БД из настроек Render
-# В Render мы добавим переменную окружения MONGO_URI
+# Подключение к MongoDB Atlas
 MONGO_URI = os.getenv("MONGO_URI")
+if not MONGO_URI:
+    print("ОШИБКА: Переменная MONGO_URI не найдена в настройках Render!")
+
 client = MongoClient(MONGO_URI)
 db = client.finance_db
 entries_collection = db.entries
@@ -37,20 +40,30 @@ async def read_index():
 
 @app.get("/balance/{user_id}")
 async def get_balance(user_id: str):
+    # Ищем все записи пользователя
     cursor = entries_collection.find({"user_id": user_id})
-    total = 0
+    total = 0.0
     for entry in cursor:
-        total += entry['amount'] if entry['type'] == 'income' else -entry['amount']
+        amount = entry.get('amount', 0)
+        entry_type = entry.get('type', 'expense')
+        total += amount if entry_type == 'income' else -amount
     return {"balance": total}
 
 @app.get("/history/{user_id}")
 async def get_history(user_id: str):
-    # Получаем записи, заменяя _id MongoDB на обычный id для фронтенда
+    # Получаем записи, сортируем по дате (сначала новые)
     cursor = entries_collection.find({"user_id": user_id}).sort("timestamp", -1)
+
     history = []
     for entry in cursor:
-        entry['_id'] = str(entry['_id'])
-        history.append(entry)
+        # ВАЖНО: Превращаем _id (ObjectId) в обычную строку id, чтобы фронтенд ее видел
+        history.append({
+            "id": str(entry["_id"]),
+            "amount": entry.get("amount", 0),
+            "comment": entry.get("comment", ""),
+            "type": entry.get("type", "expense"),
+            "timestamp": entry.get("timestamp", datetime.now()).isoformat() if isinstance(entry.get("timestamp"), datetime) else entry.get("timestamp", datetime.now().isoformat())
+        })
     return history
 
 @app.post("/add")
@@ -67,6 +80,12 @@ async def add_entry(entry: Entry):
 
 @app.delete("/delete/{entry_id}")
 async def delete_entry(entry_id: str):
-    from bson.objectid import ObjectId
-    entries_collection.delete_one({"_id": ObjectId(entry_id)})
-    return {"status": "deleted"}
+    try:
+        entries_collection.delete_one({"_id": ObjectId(entry_id)})
+        return {"status": "deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=10000)

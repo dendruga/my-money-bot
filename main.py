@@ -1,16 +1,3 @@
-fastapi
-uvicorn
-pydantic
-pymongo[srv]
-dnspython
-
-Шаг 2: Обновляем main.py на GitHub
-
-Замените весь код в main.py на этот. Он теперь работает с MongoDB Atlas:
-
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List

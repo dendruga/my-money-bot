@@ -1,10 +1,24 @@
-from fastapi import FastAPI
+fastapi
+uvicorn
+pydantic
+pymongo[srv]
+dnspython
+
+Шаг 2: Обновляем main.py на GitHub
+
+Замените весь код в main.py на этот. Он теперь работает с MongoDB Atlas:
+
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import sqlite3
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List
 from datetime import datetime
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import os
+from pymongo import MongoClient
 
 app = FastAPI()
 
@@ -15,22 +29,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_PATH = "finance.db"
-
-def init_db():
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT,
-                amount REAL,
-                comment TEXT,
-                type TEXT,
-                timestamp DATETIME
-            )
-        """)
-
-init_db()
+# Получаем ссылку на БД из настроек Render
+# В Render мы добавим переменную окружения MONGO_URI
+MONGO_URI = os.getenv("MONGO_URI")
+client = MongoClient(MONGO_URI)
+db = client.finance_db
+entries_collection = db.entries
 
 class Entry(BaseModel):
     user_id: str
@@ -40,39 +44,42 @@ class Entry(BaseModel):
 
 @app.get("/")
 async def read_index():
-    # Проверяем самый простой путь
     if os.path.exists("money_webapp.html"):
         return FileResponse("money_webapp.html")
-    return {"error": "money_webapp.html not found in root directory"}
+    return {"error": "money_webapp.html not found"}
 
 @app.get("/balance/{user_id}")
 async def get_balance(user_id: str):
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT amount, type FROM entries WHERE user_id = ?", (user_id,))
-        rows = cursor.fetchall()
-        total = sum(amount if entry_type == 'income' else -amount for amount, entry_type in rows)
-        return {"balance": total}
+    cursor = entries_collection.find({"user_id": user_id})
+    total = 0
+    for entry in cursor:
+        total += entry['amount'] if entry['type'] == 'income' else -entry['amount']
+    return {"balance": total}
 
 @app.get("/history/{user_id}")
 async def get_history(user_id: str):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM entries WHERE user_id = ? ORDER BY timestamp DESC", (user_id,))
-        return [dict(row) for row in cursor.fetchall()]
+    # Получаем записи, заменяя _id MongoDB на обычный id для фронтенда
+    cursor = entries_collection.find({"user_id": user_id}).sort("timestamp", -1)
+    history = []
+    for entry in cursor:
+        entry['_id'] = str(entry['_id'])
+        history.append(entry)
+    return history
 
 @app.post("/add")
 async def add_entry(entry: Entry):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            "INSERT INTO entries (user_id, amount, comment, type, timestamp) VALUES (?, ?, ?, ?, ?)",
-            (entry.user_id, entry.amount, entry.comment, entry.type, datetime.now().isoformat())
-        )
+    document = {
+        "user_id": entry.user_id,
+        "amount": entry.amount,
+        "comment": entry.comment,
+        "type": entry.type,
+        "timestamp": datetime.now()
+    }
+    entries_collection.insert_one(document)
     return {"status": "success"}
 
 @app.delete("/delete/{entry_id}")
-async def delete_entry(entry_id: int):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+async def delete_entry(entry_id: str):
+    from bson.objectid import ObjectId
+    entries_collection.delete_one({"_id": ObjectId(entry_id)})
     return {"status": "deleted"}

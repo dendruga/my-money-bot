@@ -1,79 +1,127 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-import sqlite3
-from datetime import datetime
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-import os
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Мои Финансы Mini App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { background-color: #f3f4f6; }
+        .balance-card { background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); }
+    </style>
+</head>
+<body class="p-4 max-w-md mx-auto font-sans">
 
-app = FastAPI()
+    <!-- Balance Card -->
+    <div class="balance-card text-white p-6 rounded-3xl shadow-lg mb-6 text-center">
+        <h1 class="text-sm opacity-80 uppercase tracking-wider font-medium">Текущий баланс</h1>
+        <div id="totalBalance" class="text-4xl font-bold my-2">0 ₽</div>
+    </div>
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    <!-- Input Section -->
+    <div class="bg-white p-5 rounded-3xl shadow-sm mb-6">
+        <div class="flex flex-col gap-4">
+            <input type="number" id="amount" placeholder="Сумма" class="w-full p-3 bg-gray-100 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-lg">
+            <input type="text" id="comment" placeholder="Комментарий" class="w-full p-3 bg-gray-100 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500">
 
-DB_PATH = "finance.db"
+            <div class="grid grid-cols-2 gap-3">
+                <button onclick="addEntry('expense')" class="bg-red-100 text-red-600 font-bold p-3 rounded-xl hover:bg-red-200 transition-colors">Потратил</button>
+                <button onclick="addEntry('income')" class="bg-green-100 text-green-600 font-bold p-3 rounded-xl hover:bg-green-200 transition-colors">Отложил</button>
+            </div>
+        </div>
+    </div>
 
-def init_db():
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT,
-                amount REAL,
-                comment TEXT,
-                type TEXT,
-                timestamp DATETIME
-            )
-        """)
+    <!-- History Section -->
+    <div class="flex justify-between items-center mb-4">
+        <h2 class="text-lg font-semibold text-gray-700">История</h2>
+    </div>
 
-init_db()
+    <div id="historyList" class="flex flex-col gap-3">
+        <!-- Entries will appear here -->
+    </div>
 
-class Entry(BaseModel):
-    user_id: str
-    amount: float
-    comment: str
-    type: str
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
 
-@app.get("/")
-async def read_index():
-    # На Render файл будет лежать в корне проекта
-    path = "money_webapp.html"
-    if os.path.exists(path):
-        return FileResponse(path)
-    return {"error": "Frontend file not found on server"}
+        // ТЕПЕРЬ ЗДЕСЬ ВАША РЕАЛЬНАЯ ССЫЛКА ОТ RENDER
+        const API_URL = "https://my-money-bot-h4g2.onrender.com";
+        const userId = tg.initDataUnsafe?.user?.id || "test_user";
 
-@app.get("/balance/{user_id}")
-async def get_balance(user_id: str):
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT amount, type FROM entries WHERE user_id = ?", (user_id,))
-        rows = cursor.fetchall()
-        total = sum(amount if entry_type == 'income' else -amount for amount, entry_type in rows)
-        return {"balance": total}
+        async function updateUI() {
+            try {
+                const balanceRes = await fetch(`${API_URL}/balance/${userId}`);
+                const balanceData = await balanceRes.json();
+                document.getElementById('totalBalance').innerText = `${balanceData.balance} ₽`;
 
-@app.get("/history/{user_id}")
-async def get_history(user_id: str):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM entries WHERE user_id = ? ORDER BY timestamp DESC", (user_id,))
-        return [dict(row) for row in cursor.fetchall()]
+                const historyRes = await fetch(`${API_URL}/history/${userId}`);
+                const entries = await historyRes.json();
 
-@app.post("/add")
-async def add_entry(entry: Entry):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            "INSERT INTO entries (user_id, amount, comment, type, timestamp) VALUES (?, ?, ?, ?, ?)",
-            (entry.user_id, entry.amount, entry.comment, entry.type, datetime.now().isoformat())
-        )
-    return {"status": "success"}
+                const list = document.getElementById('historyList');
+                list.innerHTML = '';
 
-@app.delete("/delete/{entry_id}")
-async def delete_entry(entry_id: int):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
-    return {"status": "deleted"}
+                entries.forEach(entry => {
+                    const isIncome = entry.type === 'income';
+                    const date = new Date(entry.timestamp).toLocaleDateString('ru-RU', {
+                        day: 'numeric',
+                        month: 'short'
+                    });
+
+                    const item = document.createElement('div');
+                    item.className = `bg-white p-4 rounded-2xl shadow-sm flex justify-between items-center`;
+                    item.innerHTML = `
+                        <div class="flex flex-col">
+                            <span class="text-xs text-gray-400">${date}</span>
+                            <span class="text-sm text-gray-600">${entry.comment || 'Без комментария'}</span>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <span class="font-bold ${isIncome ? 'text-green-500' : 'text-red-500'}">
+                                ${isIncome ? '+' : '-'}${entry.amount} ₽
+                            </span>
+                            <button onclick="deleteEntry(${entry.id})" class="text-gray-300 hover:text-red-400 text-lg">&times;</button>
+                        </div>
+                    `;
+                    list.appendChild(item);
+                });
+            } catch (e) {
+                console.error("Ошибка обновления данных:", e);
+            }
+        }
+
+        async function addEntry(type) {
+            const amountInput = document.getElementById('amount');
+            const commentInput = document.getElementById('comment');
+            const amount = parseFloat(amountInput.value);
+            const comment = commentInput.value.trim();
+
+            if (isNaN(amount) || amount <= 0) {
+                alert('Введите корректную сумму');
+                return;
+            }
+
+            await fetch(`${API_URL}/add`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: userId,
+                    amount: amount,
+                    comment: comment,
+                    type: type
+                })
+            });
+
+            amountInput.value = '';
+            commentInput.value = '';
+            updateUI();
+        }
+
+        async function deleteEntry(id) {
+            await fetch(`${API_URL}/delete/${id}`, { method: 'DELETE' });
+            updateUI();
+        }
+
+        updateUI();
+    </script>
+</body>
+</html>
